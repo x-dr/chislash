@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# set -eEx
+
+IP_CMD='ip'
+IPTABLES_CMD='iptables'
+IP_STACK='ipv4'
+# 保留地址 https://zh.m.wikipedia.org/zh-hans/%E4%BF%9D%E7%95%99IP%E5%9C%B0%E5%9D%80
+NO_PROXY_IP=("0.0.0.0/8" "10.0.0.0/8" "100.64.0.0/10" "127.0.0.0/8" "169.254.0.0/16" "172.16.0.0/12" "192.0.0.0/24" "192.0.2.0/24" \
+"192.88.99.0/24" "192.168.0.0/16" "198.18.0.0/15" "198.51.100.0/24" "203.0.113.0/24" "224.0.0.0/4" "233.252.0.0/24" "240.0.0.0/4" "255.255.255.255/32")
+# 第一个参数决定IPv4/IPv6
+if [ "$1" == "ipv6" ]; then
+    IP_CMD='ip -6'
+    IPTABLES_CMD='ip6tables'
+    IP_STACK='ipv6'
+    NO_PROXY_IP=(`ip a|grep inet6| awk '{print $2}'|grep -v -P '^(:|f)'` "::/128" "::1/128" "::ffff:0:0/96" "::ffff:0:0:0/96" \
+    "64:ff9b::/96" "100::/64" "2001::/32" "2001:20::/28" "2001:db8::/32" "2002::/16" "fc00::/7" "fe80::/10" "ff00::/8")
+fi
+if [ "`lsmod |grep xt_TPROXY`" == "" ]; then
+    # 如果宿主机与内核不兼容, 或者宿主机不支持TProxy, 则会失败
+    __=`modprobe xt_TPROXY >/dev/null 2>&1`
+    if [ "`lsmod |grep xt_TPROXY`" == "" ]; then
+        echo "tproxy is not supported"
+        exit 1
+    fi
+fi
+# ENABLE ip forward
+if [ "$IP_STACK" == "ipv4" ]; then
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
+fi
+if [ "$IP_STACK" == "ipv6" ]; then
+    sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1
+fi
+# ROUTE RULES
+$IP_CMD rule add fwmark $PROXY_FWMARK lookup $PROXY_ROUTE_TABLE
+if [ "$IP_STACK" == "ipv4" ]; then
+    $IP_CMD route add local 0.0.0.0/0 dev lo table $PROXY_ROUTE_TABLE
+fi
+if [ "$IP_STACK" == "ipv6" ]; then
+    $IP_CMD route add local ::/0 dev lo table $PROXY_ROUTE_TABLE
+fi
+######################## 转发流量设置 ########################
+# CLASH 链负责处理转发流量 
+$IPTABLES_CMD -t mangle -N CLASH || true
+$IPTABLES_CMD -t mangle -F CLASH || true
+# 目标地址为局域网或保留地址的流量跳过处理
+for element in ${NO_PROXY_IP[@]}
+do
+    if [ "$element" == "" ]; then continue; fi
+    $IPTABLES_CMD -t mangle -A CLASH -d $element -j RETURN
+done
+
+# 其他所有流量转向到 $CLASH_TPROXY_PORT 端口，并打上 mark
+$IPTABLES_CMD -t mangle -A CLASH -p tcp -j TPROXY --on-port $CLASH_TPROXY_PORT --tproxy-mark $PROXY_FWMARK
+if [ "$UDP_PROXY" == "1" ]; then
+    $IPTABLES_CMD -t mangle -A CLASH -p udp -j TPROXY --on-port $CLASH_TPROXY_PORT --tproxy-mark $PROXY_FWMARK
+fi
+
+# 最后让所有流量通过 CLASH 链进行处理
+$IPTABLES_CMD -t mangle -A PREROUTING -j CLASH
+######################## 本机流量设置 ########################
+# CLASH_LOCAL 链负责处理网关本身发出的流量
+$IPTABLES_CMD -t mangle -N CLASH_LOCAL || true
+$IPTABLES_CMD -t mangle -F CLASH_LOCAL || true
+# 跳过内网流量
+for element in ${NO_PROXY_IP[@]}
+do
+    if [ "$element" == "" ]; then continue; fi
+    $IPTABLES_CMD -t mangle -A CLASH_LOCAL -d $element -j RETURN
+done
+
+# 跳过 CLASH 程序本身发出的流量, 防止死循环(CLASH 程序需要使用 "CLASH" 用户启动) 
+$IPTABLES_CMD -t mangle -A OUTPUT -p tcp -m owner --uid-owner clash -j RETURN
+if [ "$UDP_PROXY" == "1" ]; then
+    $IPTABLES_CMD -t mangle -A OUTPUT -p udp -m owner --uid-owner clash -j RETURN
+fi
+# 为本机发出的流量打 mark
+$IPTABLES_CMD -t mangle -A CLASH_LOCAL -p tcp -j MARK --set-mark $PROXY_FWMARK
+if [ "$UDP_PROXY" == "1" ]; then
+    $IPTABLES_CMD -t mangle -A CLASH_LOCAL -p udp -j MARK --set-mark $PROXY_FWMARK
+fi
+
+# 让本机发出的流量跳转到 CLASH_LOCAL
+# CLASH_LOCAL 链会为本机流量打 mark, 打过 mark 的流量会重新回到 PREROUTING 上
+$IPTABLES_CMD -t mangle -A OUTPUT -j CLASH_LOCAL
+
+# Fake-IP模式 修复 ICMP(ping) 
+# 这并不能保证 ping 结果有效(CLASH 等不支持转发 ICMP), 只是让它有返回结果而已
+# --to-destination 设置为一个可达的地址即可
+# if [ "$IP_STACK" == "ipv4" ]; then
+#     sysctl -w net.$IP_STACK.conf.all.route_localnet=1 >/dev/null 2>&1
+#     $IPTABLES_CMD -t nat -A PREROUTING -p icmp -d 198.18.0.0/16 -j DNAT --to-destination 127.0.0.1
+# fi
+
+######################## DNS流量设置 ########################
+
+# 转发所有 DNS 查询到 1053 端口
+
+# 如果想要 dig 等命令可用, 可以只处理 DNS SERVER 设置为当前内网的 DNS 请求
+# $IPTABLES_CMD -t nat -I PREROUTING -p udp --dport 53 -d 192.168.0.0/16 -j REDIRECT --to 1053
+$IPTABLES_CMD -t nat -N CLASH_DNS_LOCAL
+$IPTABLES_CMD -t nat -N CLASH_DNS_EXTERNAL
+$IPTABLES_CMD -t nat -F CLASH_DNS_LOCAL
+$IPTABLES_CMD -t nat -F CLASH_DNS_EXTERNAL
+
+$IPTABLES_CMD -t nat -A CLASH_DNS_LOCAL -p udp --dport 53 -j REDIRECT --to-ports 1053
+$IPTABLES_CMD -t nat -A CLASH_DNS_LOCAL -p tcp --dport 53 -j REDIRECT --to-ports 1053
+$IPTABLES_CMD -t nat -A CLASH_DNS_LOCAL -m owner --uid-owner clash -j RETURN
+
+$IPTABLES_CMD -t nat -A CLASH_DNS_EXTERNAL -p udp --dport 53 -j REDIRECT --to-ports 1053
+$IPTABLES_CMD -t nat -A CLASH_DNS_EXTERNAL -p tcp --dport 53 -j REDIRECT --to-ports 1053
+
+$IPTABLES_CMD -t nat -I OUTPUT -p udp -j CLASH_DNS_LOCAL
+$IPTABLES_CMD -t nat -I PREROUTING -p udp -j CLASH_DNS_EXTERNAL
