@@ -22,9 +22,9 @@ mode: rule
 
 #自定义 geodata url
 geox-url:
-  geoip: "https://kkgithub.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
-  geosite: "https://kkgithub.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
-  mmdb: "https://kkgithub.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb"
+  geoip: "https://gh.tryxd.cn/github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
+  geosite: "https://gh.tryxd.cn/github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
+  mmdb: "https://gh.tryxd.cn/github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb"
 
 geo-auto-update: false # 是否自动更新 geodata
 geo-update-interval: 24 # 更新间隔，单位：小时
