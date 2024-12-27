@@ -30,7 +30,7 @@ COPY metacubexd   /default/clash/metacubexd
 COPY Country.mmdb /default/clash/Country.mmdb
 
 
-ARG CLASHMETAVER=v1.18.5
+ARG CLASHMETAVER=v1.19.0
 ARG SCVER=v0.9.0
 
 RUN echo 'detect arch ...' \
