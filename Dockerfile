@@ -31,7 +31,7 @@ COPY Country.mmdb /default/clash/Country.mmdb
 
 
 ARG CLASHMETAVER=v1.18.5
-ARG SCVER=v0.92
+ARG SCVER=v0.9.0
 
 RUN echo 'detect arch ...' \
     && SC_ARCH='unknown' && ARCH='unknown' \
@@ -44,8 +44,9 @@ RUN echo 'detect arch ...' \
     && chmod 774 /usr/bin/clash \
     && cp /usr/bin/clash /usr/bin/clash-meta \
 
+    # https://github.com/tindy2013/subconverter/releases/download/v0.9.0/subconverter_aarch64.tar.gz
     && echo 'install  subconverter ...' \
-    && wget https://github.com/x-dr/subconverter/releases/download/$SCVER/subconverter_$SC_ARCH.tar.gz \
+    && wget https://github.com/tindy2013/subconverter/releases/download/$SCVER/subconverter_$SC_ARCH.tar.gz \
     && gunzip subconverter_$SC_ARCH.tar.gz && tar xvf subconverter_$SC_ARCH.tar && rm subconverter_$SC_ARCH.tar \
     && mv subconverter /default/ \
 
